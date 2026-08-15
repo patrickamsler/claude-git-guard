@@ -14,7 +14,8 @@
 # the ALLOWED/DENIED results in the "command prefixes" section below.
 #
 # Regenerate after changing READ_ONLY or OPTS_WITH_VALUE — the verdicts are a
-# snapshot, not a specification.
+# snapshot, not a specification. Every row is replayed through the hook by
+# `pytest tests/test_git_guard.py -k matrix`, one test per row.
 
 
 ## 1. Single git command — allowlisted (READ_ONLY)
