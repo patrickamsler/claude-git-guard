@@ -1,0 +1,216 @@
+# git-guard command matrix
+#
+# Every line below was run through .claude/hooks/git-guard.py and the verdict
+# recorded is what the hook ACTUALLY returned, not what it ought to return.
+# Where the two differ the line is tagged; see "Known gaps" and "False
+# positives" at the bottom.
+#
+# Format:  <VERDICT>  <tab>  <command>            [# note]
+#   DENIED   hook returns permissionDecision=deny, command never runs
+#   ALLOWED  hook stays silent, command runs
+#
+# Config at time of capture: .claude/settings.json has NO "if" filter, so the
+# hook is spawned for every Bash call. Re-adding an "if" rule changes many of
+# the ALLOWED/DENIED results in the "command prefixes" section below.
+#
+# Regenerate after changing READ_ONLY or OPTS_WITH_VALUE — the verdicts are a
+# snapshot, not a specification.
+
+
+## 1. Single git command — allowlisted (READ_ONLY)
+
+ALLOWED		git status
+ALLOWED		git status --short
+ALLOWED		git log --oneline -5
+ALLOWED		git diff HEAD~1
+ALLOWED		git show HEAD
+ALLOWED		git blame README.md
+ALLOWED		git add hello_world.txt
+ALLOWED		git add -A
+ALLOWED		git fetch origin
+ALLOWED		git remote -v
+ALLOWED		git ls-files
+ALLOWED		git rev-parse HEAD
+ALLOWED		git describe --tags
+ALLOWED		git shortlog -sn
+ALLOWED		git for-each-ref
+ALLOWED		git cat-file -p HEAD
+ALLOWED		git check-ignore .venv
+ALLOWED		git grep TODO
+ALLOWED		git version
+ALLOWED		git help commit
+
+
+## 2. Single git command — state changing
+
+DENIED		git commit -m 'x'
+DENIED		git commit --amend --no-edit
+DENIED		git push
+DENIED		git push --force origin main
+DENIED		git pull
+DENIED		git reset --hard HEAD~1
+DENIED		git rebase -i HEAD~3
+DENIED		git checkout -b feature
+DENIED		git switch main
+DENIED		git restore README.md
+DENIED		git merge feature
+DENIED		git cherry-pick abc123
+DENIED		git revert HEAD
+DENIED		git branch -D feature
+DENIED		git tag -a v1.0 -m 'x'
+DENIED		git stash
+DENIED		git clean -fd
+DENIED		git init
+DENIED		git clone https://example.com/r.git
+DENIED		git config --global user.name x
+DENIED		git submodule update --init
+DENIED		git worktree add ../wt
+DENIED		git gc --prune=now
+DENIED		git update-ref refs/heads/main abc123
+DENIED		git filter-branch --tree-filter x HEAD
+DENIED		git reflog expire --expire=now
+DENIED		git am patch.mbox
+DENIED		git apply patch.diff
+
+
+## 3. Compound — && chains
+# One denied subcommand anywhere on the line denies the whole line.
+
+DENIED		cd sub && git commit -m x
+DENIED		git add -A && git commit -m x
+DENIED		mkdir -p sub && cd sub && git init && git commit -m x
+DENIED		npm test && git push
+ALLOWED		git status && git log
+ALLOWED		cd sub && git status
+
+
+## 4. Compound — other separators
+
+DENIED		git fetch; git reset --hard
+DENIED		git add -A; echo done; git commit -m x
+DENIED		false || git push
+ALLOWED		git status; git log
+ALLOWED		git log | head -5
+ALLOWED		git status | grep modified
+ALLOWED		git diff || true
+
+
+## 5. Command prefixes — git is not the first word
+# These are the cases that regress if an "if": "Bash(git *)" filter is
+# re-added to settings.json: the filter prefix-matches each segment, so none
+# of these would reach the hook and every one would become ALLOWED.
+
+DENIED		env FOO=bar git config --global x y
+DENIED		echo x | xargs -I{} git config --get user.email
+DENIED		time git commit -m x
+DENIED		nohup git push &
+DENIED		sudo git reset --hard
+DENIED		nice -n 10 git gc
+ALLOWED		env FOO=bar git status
+
+
+## 6. Git global options before the subcommand
+# Exercises OPTS_WITH_VALUE: an option that eats the next token must not let
+# that token be mistaken for the subcommand.
+
+DENIED		git -C sub commit -m x
+DENIED		git -c user.name=x commit -m x
+DENIED		git --git-dir=/tmp/r/.git --work-tree=/tmp/r commit -m x
+DENIED		git --namespace=ns push
+DENIED		git --exec-path=/tmp commit -m x
+DENIED		git --no-pager reset --hard
+ALLOWED		git -C sub status
+ALLOWED		git -c core.pager=cat log
+ALLOWED		git --git-dir=/tmp/r/.git status
+ALLOWED		git --no-pager log
+
+
+## 7. Path-qualified and quoted invocations
+# Resolved via tokens[i].rsplit("/", 1)[-1] == "git".
+
+DENIED		/usr/bin/git commit -m x
+DENIED		/usr/local/bin/git push
+DENIED		./git commit -m x
+DENIED		'git' commit -m x
+DENIED		"git" push
+ALLOWED		/usr/bin/git status
+
+
+## 8. Subshells, substitution, control flow
+
+DENIED		(cd sub && git commit -m x)
+DENIED		$(git commit -m x)
+DENIED		if true; then git push; fi
+DENIED		for f in a b; do git commit -m $f; done
+ALLOWED		(git status)
+ALLOWED		`git push`			# GAP — see 11.1
+ALLOWED		bash -c 'cd sub && git commit -m x'	# GAP — see 11.2
+
+
+## 9. Not a git invocation — must stay allowed
+
+ALLOWED		ls -la
+ALLOWED		echo 'git commit -m x'
+ALLOWED		grep -r 'git push' README.md
+ALLOWED		cat .claude/hooks/git-guard.py
+ALLOWED		python3 -m pytest -q
+ALLOWED		digit status
+ALLOWED		legit commit
+ALLOWED		./scripts/git-helper.sh
+DENIED		echo git commit			# FALSE POSITIVE — see 12.1
+
+
+## 10. Malformed / edge input
+
+ALLOWED		git				# bare, no subcommand
+ALLOWED		git --no-pager			# options only, no subcommand
+ALLOWED		git -C sub			# option consumes its value, then nothing left
+ALLOWED		git	status			# tab-separated; shlex splits it, subcommand is status
+DENIED		git   commit   -m   x		# runs of spaces collapse
+DENIED		git 'unbalanced			# fail-closed path: unbalanced quote -> naive split
+DENIED		git commit -m 'unbalanced	# fail-closed path
+DENIED		git COMMIT -m x			# FALSE POSITIVE — see 12.2
+ALLOWED		GIT COMMIT -m x			# GAP on macOS — see 11.3
+
+
+## 11. Known gaps — currently ALLOWED, arguably should be DENIED
+# All four were executed against the live hook and did run. They are the
+# regression targets if you decide to harden the parser.
+#
+# 11.1  Backtick substitution. `$(...)` is caught because shlex splits on the
+#       punctuation, but a backtick binds into the token: "`git" != "git".
+#         `git push`
+#         echo `git config --get user.email`
+#
+# 11.2  Any git call inside a quoted string passed to another interpreter.
+#       shlex yields "git commit -m x" as ONE token, so it never equals "git".
+#         bash -c 'git commit -m x'
+#         sh -c "git push"
+#         eval 'git commit -m x'
+#
+# 11.3  Case. The check is case-sensitive, but macOS filesystems are not, so
+#       PATH lookup resolves GIT -> the git binary and the command runs.
+#       Not a gap on a case-sensitive filesystem (Linux, or macOS APFS-CS).
+#         GIT config --get user.email
+#
+# 11.4  Indirection — the literal token "git" never appears at all. Inherent
+#       to any string-matching hook; listed so it is not mistaken for a bug.
+#         G=git; $G commit -m x
+#         alias g=git; g push
+#         bash scripts/deploy.sh          (script contains git commands)
+#
+# 11.5  Allowlisted subcommands that execute arbitrary programs. difftool is
+#       in READ_ONLY but -x takes a command to run.
+#         git difftool -x 'sh -c whoami'
+
+
+## 12. False positives — currently DENIED, harmless but noisy
+#
+# 12.1  "git" as a bare argument to another program. The parser sees the token
+#       "git" and reads the next token as its subcommand.
+#         echo git commit
+#       Quoting avoids it: echo 'git commit' is ALLOWED.
+#
+# 12.2  Subcommand case. git itself rejects "git COMMIT", so denying it costs
+#       nothing, but the reason string reads oddly.
+#         git COMMIT -m x
