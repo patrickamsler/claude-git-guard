@@ -5,11 +5,14 @@ history.
 
 ## What it does
 
-`.claude/hooks/git-guard.py` inspects every Bash command Claude wants to run, tokenizes it, and
-finds the subcommand of each `git` invocation on the line — including inside compound commands
-(`cd sub && git commit …`), pipelines, and subshells. Anything not in the `READ_ONLY` allowlist is
-denied with an explanation. The policy: Claude may inspect and stage, but committing, pushing,
-rebasing and resetting stay with the developer.
+[`.claude/hooks/git-guard.py`](.claude/hooks/git-guard.py) inspects the Bash command Claude wants to
+run, tokenizes it, and finds the subcommand of each `git` invocation on the line — including inside
+compound commands (`cd sub && git commit …`), pipelines, and subshells. Anything not in the
+`READ_ONLY` allowlist is denied with an explanation. The policy: Claude may inspect and stage, but
+committing, pushing, rebasing and resetting stay with the developer.
+
+The hook is wired up in [`.claude/settings.json`](.claude/settings.json) and runs on every Bash
+call.
 
 The accompanying `permissions.deny` rules also stop Claude from editing `.git/` directly or running
 `gh pr merge`.
@@ -27,39 +30,13 @@ The venv exists for the test suite only — see the note below.
 
 ## Configuring the Claude Code hook
 
-`.claude/settings.json` in this directory is picked up automatically when you run Claude Code here.
-No further action is needed for this project.
+To use the guard in repository:
 
-To use the guard in **another** repository:
-
-1. Copy `.claude/hooks/git-guard.py` into that repo's `.claude/hooks/`.
-2. Merge the `hooks` and `permissions` blocks from `.claude/settings.json` into that repo's
-   `.claude/settings.json`.
+1. Copy [`.claude/hooks/git-guard.py`](.claude/hooks/git-guard.py) into that repo's `.claude/hooks/`.
+2. Merge the `hooks` and `permissions` blocks from [`.claude/settings.json`](.claude/settings.json)
+   into that repo's `.claude/settings.json`.
 3. Restart Claude Code — settings changes are read at session start.
 4. Run `/hooks` to confirm the `PreToolUse` entry is registered.
-
-The hook entry looks like this:
-
-```json
-{
-  "type": "command",
-  "command": "python3",
-  "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/git-guard.py"],
-  "statusMessage": "Checking git policy…"
-}
-```
-
-Because `args` is present, `command` is resolved as an executable and spawned **directly, with no
-shell**, and `${CLAUDE_PROJECT_DIR}` is substituted per-element as a plain string. That means paths
-containing quotes, `$`, or backticks never reach a shell parser.
-
-### Why there is no `if` filter
-
-Claude Code supports an `"if": "Bash(git *)"` key to skip spawning the hook for non-git commands.
-It is deliberately omitted here: `if` uses permission-rule **prefix** matching, so
-`cd sub && git commit -m x` would not match and the hook would never run — defeating the whole point
-of the script's compound-command parsing. Without the filter the hook runs on every Bash call and
-exits in milliseconds when no `git` token is present.
 
 ## Notes
 
